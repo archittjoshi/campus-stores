@@ -67,22 +67,41 @@
   const shifts = [
     {
       time: "Friday · 3:45 pm",
+      clock: 945,
       title: "Pickup at the counter",
       text: "Kabir is here for the Film Society screening. The film starts at four. Can he leave with everything he needs?",
       next: "Move to return time",
     },
     {
       time: "Friday · 7:30 pm",
+      clock: 1170,
       title: "The kit comes back in pieces",
       text: "Kabir has brought back the projector and speaker. “Leela still has the adapter. She’ll drop it off tomorrow at nine.” Take the return and hand over to the morning shift.",
       next: "Move to next morning",
     },
     {
       time: "Saturday · 9:00 am",
+      clock: 1980,
       title: "Morning shift",
       text: "You’ve just taken over. Leela walks in with an adapter. Work out what was outstanding from the screening and close the loan for the right item.",
     },
   ];
+  const dueClock = {
+    "Fri 8 pm": 1200,
+    "Sat 9 am": 1980,
+    "Sat 10 am": 2040,
+    "Sat noon": 2160,
+  };
+  const lateBy = (l) =>
+    l.back
+      ? 0
+      : Math.max(0, shifts[s.phase].clock - (dueClock[l.due] ?? Infinity));
+  const since = (mins) => {
+    const h = Math.floor(mins / 60);
+    const m = mins % 60;
+    if (!h) return m + " min";
+    return h + " h" + (m ? " " + m + " min" : "");
+  };
   const pages = [
     ["Requests", "clipboard-list"],
     ["Inventory", "package"],
@@ -221,9 +240,14 @@
     return html;
   }
   function register() {
+    const open = s.loans.filter((l) => !l.back);
+    const lateCount = open.filter((l) => lateBy(l)).length;
     let html = head(
       "Loan register",
-      "One slip per physical unit",
+      "One slip per physical unit · " +
+        open.length +
+        " outstanding" +
+        (lateCount ? " · " + lateCount + " overdue" : ""),
       s.editing
         ? btn("Cancel", "cancel")
         : btn("New issue slip", "new", "", "primary"),
@@ -282,17 +306,63 @@
     const shown = s.loans
       .filter((l) => !s.onlyOpen || !l.back)
       .slice()
-      .reverse();
+      .reverse()
+      .sort((a, b) => lateBy(b) - lateBy(a));
     if (!shown.length) html += "<p>No outstanding slips.</p>";
-    for (const l of shown)
-      html += row(
-        "L-" + l.num + " · " + l.asset,
-        l.req + " · " + l.who + " · Due " + l.due,
-        l.back
-          ? badge("Returned")
-          : btn("Record return", "return", String(l.num)),
-      );
+    for (const l of shown) html += loanRow(l);
     return html;
+  }
+  function expectPicker(l) {
+    const choices = [["", "Not known yet"]].concat(people.map((p) => [p, p]));
+    return (
+      '<label class="expect"><span>Expected back from</span><select data-expect="' +
+      l.num +
+      '">' +
+      choices
+        .map(
+          ([v, t]) =>
+            '<option value="' +
+            esc(v) +
+            '"' +
+            (v === (l.expect || "") ? " selected" : "") +
+            ">" +
+            esc(t) +
+            "</option>",
+        )
+        .join("") +
+      "</select></label>"
+    );
+  }
+  function loanRow(l) {
+    const a = getAsset(l.asset);
+    const late = lateBy(l);
+    const status = l.back
+      ? badge("Returned")
+      : late
+        ? '<span class="tag late">' + esc(since(late) + " overdue") + "</span>"
+        : badge("Due " + l.due, true);
+    return (
+      '<div class="row' +
+      (late ? " overdue" : "") +
+      '"><div><strong>' +
+      esc("L-" + l.num + " · " + l.asset) +
+      "</strong><small>" +
+      esc(l.req + " · " + a.type + " · " + a.model) +
+      "</small><small>" +
+      esc(
+        "Taken by " +
+          l.who +
+          " · Due " +
+          l.due +
+          (l.back ? "" : l.expect ? " · Expected from " + l.expect : ""),
+      ) +
+      "</small>" +
+      (l.back ? "" : expectPicker(l)) +
+      '</div><div class="loanactions">' +
+      status +
+      (l.back ? "" : btn("Record return", "return", String(l.num), "primary")) +
+      "</div></div>"
+    );
   }
   function deskbook() {
     let html = head(
@@ -410,7 +480,13 @@
         const l = s.loans.find((l) => l.num === Number(v));
         if (!l || l.back) return;
         l.back = true;
-        s.notice = l.asset + " returned to stock. Slip L-" + l.num + " closed.";
+        s.notice =
+          l.asset +
+          " returned to stock" +
+          (l.expect ? " from " + l.expect : "") +
+          ". Slip L-" +
+          l.num +
+          " closed.";
         break;
       }
     }
@@ -420,6 +496,21 @@
     if (e.target.matches("[data-filter]")) {
       s.filter = e.target.value;
       commit();
+      return;
+    }
+    if (e.target.matches("[data-expect]")) {
+      const l = s.loans.find(
+        (x) => x.num === Number(e.target.dataset.expect) && !x.back,
+      );
+      if (!l) return;
+      const v = e.target.value;
+      if (v && !people.includes(v)) return;
+      l.expect = v;
+      commit(
+        v
+          ? "Slip L-" + l.num + " is expected back from " + v + "."
+          : "Cleared who is expected to return slip L-" + l.num + ".",
+      );
     }
   });
   root.addEventListener("submit", (e) => {
